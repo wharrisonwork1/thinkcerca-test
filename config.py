@@ -24,3 +24,5 @@ TARGET_MODULE = "Module 2"
 
 # === Output ===
 OUTPUT_FILE = os.path.join(DATA_DIR, "Grade8_Unit1_Module2_Mapped_Standards.xlsx")
+# --- Temporary manual PDF→InDesign page offset ---
+PAGE_OFFSET = 31  # Example: Module 2 starts at page 32

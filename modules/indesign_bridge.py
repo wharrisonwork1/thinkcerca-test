@@ -3,224 +3,181 @@ import csv
 import subprocess
 from pathlib import Path
 import pandas as pd
+from thinkcerca_tool.config import DATA_DIR
 
-# === CONFIG ===
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+# === PATH CONFIGURATION ===
+BASE_DIR = Path(DATA_DIR).parent
+DATA_DIR = BASE_DIR / "data"           # input sources
+OUTPUT_DIR = BASE_DIR / "output"       # all generated outputs
+JSX_DIR = BASE_DIR / "jsx"             # jsx scripts (generated + templates)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# === FILE PATHS ===
 INDD_FILE = DATA_DIR / "AI-1-grade-8-student-guide-volume-1.indd"
-MAPPING_XLSX = DATA_DIR / "Grade8_Unit1_Module2_Mapped_Standards_AI_Final.xlsx"
-JSX_FILE = Path(__file__).resolve().parents[1] / "jsx" / "insert_from_python.jsx"
-EXPORT_PDF = DATA_DIR / "AI-1-grade-8-student-guide-volume-1-MAPPED.pdf"
+MAPPING_XLSX = OUTPUT_DIR / "Grade8_Unit1_Module2_Mapped_Standards_AI_Final.xlsx"
+EXPORT_PDF = OUTPUT_DIR / "AI-1-grade-8-student-guide-volume-1-MAPPED.pdf"
+JSX_FILE = JSX_DIR / "insert_from_python.jsx"
 
+# ==============================================================
+#  CSV EXPORT
+# ==============================================================
 def export_mapping_to_csv():
-    """Export minimal CSV with Page + concatenated Standard codes."""
+    """
+    Export minimal CSV with Page + concatenated Standard codes.
+    Ensures proper numeric pages are used.
+    """
+    if not MAPPING_XLSX.exists():
+        raise FileNotFoundError(f"❌ Mapping Excel not found → {MAPPING_XLSX}")
+
     df = pd.read_excel(MAPPING_XLSX)
-    group_col = None
-    for candidate in ["Page", "Activity", "Slide Summary / Extracted Text"]:
-        if candidate in df.columns:
-            group_col = candidate
-            break
 
-    if not group_col:
-        raise ValueError(f"No suitable grouping column found in {MAPPING_XLSX}")
+    if "Page" in df.columns and pd.api.types.is_numeric_dtype(df["Page"]):
+        group_col = "Page"
+    else:
+        print("⚠️ 'Page' column missing or not numeric; falling back to 'Activity'")
+        group_col = "Activity"
 
-    df = df.groupby(group_col)["Standard Code"].apply(lambda x: ", ".join(sorted(set(str(v).strip() for v in x)))).reset_index()
-    df.rename(columns={group_col: "Page"}, inplace=True)
+    df = df[df[group_col].notnull()]
 
-    csv_path = DATA_DIR / "standards_for_indesign.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"✅ Mapping exported → {csv_path}")
+    df_out = (
+        df.groupby(group_col)["Standard Code"]
+        .apply(lambda x: ", ".join(sorted(set(str(v).strip() for v in x if v))))
+        .reset_index()
+    )
+
+    df_out.rename(columns={group_col: "Page"}, inplace=True)
+
+    try:
+        df_out["Page"] = df_out["Page"].astype(int)
+        df_out = df_out.sort_values("Page")
+    except Exception:
+        pass
+
+    csv_path = OUTPUT_DIR / "standards_for_indesign.csv"
+    df_out.to_csv(csv_path, index=False)
+    print(f"✅ Mapping exported with numeric pages → {csv_path}")
     return csv_path
 
+
+# ==============================================================
+#  JSX GENERATION (your provided script, unchanged)
+# ==============================================================
 def build_jsx(csv_path: Path):
-    """JSX with detailed logging for debugging undefined object (21) errors."""
     jsx_code = f"""
 #target "InDesign"
-(function() {{
-    var csvPath = "{csv_path.as_posix()}";
-    var inddPath = "{INDD_FILE.as_posix()}";
-    var exportPDF = "{EXPORT_PDF.as_posix()}";
+(function () {{
+  alert("🚀 Inserting clean, smaller footer text visibly on ThinkCERCA document");
 
-    var _replace = ("").replace;
-    var _trim = ("").trim;
-    var _split = ("").split;
+  var csvPath = "{csv_path.as_posix()}";
+  var inddPath = "{INDD_FILE.as_posix()}";
+  var docFile = File(inddPath);
+  if (!docFile.exists) {{ alert("❌ InDesign file not found!"); return; }}
 
-    function log(msg) {{
-        try {{
-            var f = File("~/Desktop/indesign_debug.log");
-            f.open("a");
-            f.writeln(new Date().toISOString() + " :: " + msg);
-            f.close();
-        }} catch(e) {{}}
+  var doc = app.open(docFile);
+
+  // ✅ Same overlay layer logic as POC
+  var overlayLayer;
+  try {{
+    overlayLayer = doc.layers.item("Automation Overlay");
+    overlayLayer.name;
+  }} catch (e) {{
+    overlayLayer = doc.layers.add({{ name: "Automation Overlay" }});
+  }}
+  overlayLayer.visible = true;
+  overlayLayer.locked = false;
+  overlayLayer.printable = true;
+  overlayLayer.move(LocationOptions.AT_BEGINNING);
+
+  // === Helpers ===
+  function trim(s) {{ return (s || "").replace(/^\\s+|\\s+$/g, ""); }}
+  function safeSplit(line) {{
+    var arr = [], cur = "", q = false;
+    for (var i = 0; i < line.length; i++) {{
+      var ch = line.charAt(i);
+      if (ch === '"') q = !q;
+      else if (ch === "," && !q) {{ arr.push(cur); cur = ""; }}
+      else cur += ch;
+    }}
+    arr.push(cur);
+    return arr;
+  }}
+
+  // === Read CSV ===
+  var csvFile = File(csvPath);
+  if (!csvFile.exists) {{ alert("❌ CSV not found!"); return; }}
+  csvFile.open("r");
+  var text = csvFile.read();
+  csvFile.close();
+
+  var lines = text.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n").split("\\n");
+  if (lines.length < 2) {{ alert("⚠️ CSV empty"); return; }}
+
+  var header = safeSplit(lines[0]);
+  var pageIdx = -1, codeIdx = -1;
+  for (var i = 0; i < header.length; i++) {{
+    var h = trim(header[i]);
+    if (h === "Page") pageIdx = i;
+    if (h === "Standard Code") codeIdx = i;
+  }}
+  if (pageIdx < 0) pageIdx = 0;
+  if (codeIdx < 0) codeIdx = 1;
+
+  // === Loop ===
+  for (var r = 1; r < lines.length; r++) {{
+    var line = trim(lines[r]);
+    if (!line) continue;
+    var parts = safeSplit(line);
+    if (parts.length < 2) continue;
+
+    var pageNum = parseInt(trim(parts[pageIdx]), 10);
+    var code = trim(parts[codeIdx]);
+    if (isNaN(pageNum) || !code) continue;
+
+    var page = null;
+    try {{ page = doc.pages.itemByName(pageNum.toString()); }} catch (e) {{}}
+    if (!page || !page.isValid) {{
+      try {{ page = doc.pages.item(pageNum - 1); }} catch (e2) {{}}
+    }}
+    if (!page || !page.isValid) continue;
+
+    // === Keep absolute coordinates (safe) ===
+    var tf = page.textFrames.add(overlayLayer);
+    // a bit lower than original: from 2–4in to 8.7–9.1in zone
+    tf.geometricBounds = ["8.7in", "1in", "9.1in", "5in"];
+    tf.contents = code;  // only codes
+
+    var t = tf.texts[0];
+    t.pointSize = 10; // smaller
+    t.justification = Justification.LEFT_ALIGN;
+
+    var safeFonts = ["Helvetica", "Arial", "Times-Roman", "Courier"];
+    for (var f = 0; f < safeFonts.length; f++) {{
+      try {{ t.appliedFont = app.fonts.item(safeFonts[f]); break; }} catch (e) {{}}
     }}
 
-    function realString(v) {{
-        try {{
-            return v === undefined || v === null ? "" : ("" + v);
-        }} catch(e) {{
-            return "" + v;
-        }}
-    }}
+    try {{ t.fillColor = doc.swatches.item("Black"); }} catch (e) {{}}
+    // No rectangle, no background
+    try {{ tf.strokeWeight = 0; }} catch (e) {{}}
+    try {{ tf.fillColor = doc.swatches.item("None"); }} catch (e) {{}}
 
-    log("🚀 Script started");
+    tf.bringToFront();
+    alert("✅ Inserted footer on page " + page.name + " → " + code);
+  }}
 
-    var csvFile = File(csvPath);
-    if (!csvFile.exists) {{
-        alert("❌ CSV not found: " + csvPath);
-        return;
-    }}
-    csvFile.encoding = "BINARY";
-    csvFile.open("r");
-    var csvText = realString(csvFile.read());
-    csvFile.close();
-
-    csvText = _replace.call(csvText, /\\r\\n/g, "\\n");
-    csvText = _replace.call(csvText, /\\r/g, "\\n");
-    var lines = _split.call(csvText, "\\n");
-    log("📊 Lines read: " + lines.length);
-
-    if (!lines || lines.length === 0) {{
-        alert("❌ Empty CSV.");
-        return;
-    }}
-
-    var headerLine = realString(lines[0]);
-    headerLine = _replace.call(headerLine, /^\\uFEFF/, "");
-    headerLine = _replace.call(headerLine, /\\r/g, "");
-    headerLine = _replace.call(headerLine, /\\n/g, "");
-    headerLine = _trim.call(headerLine);
-
-    var delimiter = ",";
-    if (headerLine.indexOf(";") !== -1) delimiter = ";";
-    else if (headerLine.indexOf("\\t") !== -1) delimiter = "\\t";
-
-    var headerArr = _split.call(headerLine, delimiter);
-    for (var i = 0; i < headerArr.length; i++)
-        headerArr[i] = _trim.call(realString(headerArr[i]));
-
-    log("🧭 headerArr: " + headerArr.join(" | "));
-
-    var pageIdx = headerArr.indexOf("Page");
-    var codesIdx = headerArr.indexOf("Standard Code");
-    if (pageIdx < 0) pageIdx = 0;
-    if (codesIdx < 0) codesIdx = 1;
-    log("🔍 pageIdx=" + pageIdx + " codesIdx=" + codesIdx);
-
-    if (!File(inddPath).exists) {{
-        alert("❌ InDesign file not found: " + inddPath);
-        return;
-    }}
-    var doc = app.open(File(inddPath));
-    log("📘 Opened document: " + doc.name);
-
-    // === Iterate rows with detailed logs ===
-    for (var r = 1; r < lines.length; r++) {{
-        try {{
-            var line = realString(lines[r]);
-            if (!line || _trim.call(line).length === 0) continue;
-            log("---- ROW " + r + " ----");
-            log("raw line=" + line);
-
-            var parts = _split.call(line, delimiter);
-            log("parts.length=" + parts.length);
-
-            var pageNum = parseInt(parts[pageIdx], 10);
-            var codes = realString(parts[codesIdx]);
-            log("pageNum=" + pageNum + " codes=" + codes);
-
-            if (isNaN(pageNum)) {{
-                log("⚠️ Invalid pageNum string=" + parts[pageIdx]);
-                continue;
-            }}
-
-            var page;
-            try {{
-                page = doc.pages.itemByName(pageNum.toString());
-                log("page object typeof=" + (typeof page));
-            }} catch(e) {{
-                log("❌ itemByName threw: " + e);
-                continue;
-            }}
-
-            if (!page || !page.isValid) {{
-                log("⚠️ Page invalid: " + pageNum);
-                continue;
-            }}
-
-            try {{
-                log("page.bounds typeof=" + (typeof page.bounds));
-                log("page.bounds value=" + page.bounds);
-            }} catch(e) {{
-                log("⚠️ Cannot access page.bounds: " + e);
-                continue;
-            }}
-
-            var tf;
-            try {{
-                tf = page.textFrames.add();
-                log("textFrame created, typeof=" + (typeof tf));
-            }} catch(e) {{
-                log("❌ textFrames.add() failed: " + e);
-                continue;
-            }}
-
-            if (!tf || !tf.isValid) {{
-                log("⚠️ textFrame invalid");
-                continue;
-            }}
-
-            var y = page.bounds[2] - 60;
-            var x = page.bounds[1] + 30;
-            log("computed y=" + y + " x=" + x);
-
-            try {{
-                tf.geometricBounds = [y - 30, x, y, x + 250];
-                tf.contents = codes;
-            }} catch(e) {{
-                log("❌ Setting text frame bounds/contents failed: " + e);
-                continue;
-            }}
-
-            if (tf.texts && tf.texts.length > 0) {{
-                try {{
-                    var t = tf.texts[0];
-                    log("text object valid=" + (t ? "yes" : "no"));
-                    if (t) {{
-                        t.pointSize = 9;
-                        try {{ t.appliedFont = app.fonts.item("Minion Pro"); }} catch(e) {{}}
-                        try {{ t.fillColor = doc.swatches.item("Black"); }} catch(e) {{}}
-                    }}
-                }} catch(e) {{
-                    log("❌ Editing text failed: " + e);
-                }}
-            }}
-
-            log("✅ Inserted on page " + pageNum);
-        }} catch(e) {{
-            log("❌ Outer loop error row " + r + ": " + e);
-        }}
-    }}
-
-    try {{
-        var preset = app.pdfExportPresets.firstItem();
-        doc.exportFile(ExportFormat.PDF_TYPE, File(exportPDF), false, preset);
-        log("📤 Exported PDF → " + exportPDF);
-    }} catch(e) {{
-        log("⚠️ PDF export failed: " + e);
-    }}
-
-    doc.close(SaveOptions.NO);
-    alert("✅ Finished — check Desktop log");
-    log("🏁 Done.");
+  alert("🏁 Done inserting small clean codes near footer!");
 }})();
 """
     JSX_FILE.write_text(jsx_code, encoding="utf-8")
-    print(f"✅ JSX generated → {JSX_FILE}")
+    print(f"✅ JSX generated successfully → {JSX_FILE}")
     return JSX_FILE
 
 
+# ==============================================================
+#  INDESIGN LAUNCHER
+# ==============================================================
 def run_indesign(js_script: Path):
     js_path = js_script.as_posix()
-    osa_script_path = js_script.parent / "run_indesign_temp.applescript"
+    osa_script_path = JSX_DIR / "run_indesign_temp.applescript"
 
     osa_code = f'''
     tell application id "com.adobe.InDesign"
@@ -236,6 +193,9 @@ def run_indesign(js_script: Path):
     print("✅ InDesign finished processing.")
 
 
+# ==============================================================
+#  MAIN ENTRY
+# ==============================================================
 def run_full_pipeline():
     csv_path = export_mapping_to_csv()
     jsx_path = build_jsx(csv_path)
